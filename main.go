@@ -86,7 +86,7 @@ func callToolCmd() *cobra.Command {
 			if result.IsError {
 				return fmt.Errorf("%s", payload)
 			}
-			fmt.Println(payload)
+			fmt.Fprintln(cmd.OutOrStdout(), payload)
 			return nil
 		},
 	}

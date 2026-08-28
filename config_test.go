@@ -80,3 +80,18 @@ func TestFindServerConfigMalformedJSON(t *testing.T) {
 		t.Fatal("expected an error for malformed JSON")
 	}
 }
+
+func TestFindServerConfigMalformedClaudeJSON(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers": `)
+
+	if _, err := findServerConfig("srv", cwd, home); err == nil {
+		t.Fatal("expected an error for malformed JSON")
+	}
+}
+
+func TestReadConfigReportsUnreadablePath(t *testing.T) {
+	if _, err := readConfig(t.TempDir()); err == nil {
+		t.Fatal("expected an error when the config path is a directory")
+	}
+}
