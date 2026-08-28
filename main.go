@@ -1,0 +1,114 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"runtime/debug"
+
+	"github.com/spf13/cobra"
+)
+
+var version = "dev"
+
+func getVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
+
+func readArguments(stdin *os.File) (map[string]any, error) {
+	info, err := stdin.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeCharDevice != 0 {
+		return map[string]any{}, nil
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return map[string]any{}, nil
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal(data, &arguments); err != nil {
+		return nil, fmt.Errorf("invalid JSON arguments on stdin: %w", err)
+	}
+	return arguments, nil
+}
+
+func callToolCmd() *cobra.Command {
+	var verbose bool
+	cmd := &cobra.Command{
+		Use:   "mcp-cli <server> <tool>",
+		Short: "Call an MCP tool of a server configured for Claude Code.",
+		Long: `Call an MCP tool of a server configured for Claude Code.
+
+The server is looked up by name in ./.mcp.json, then in the local and user
+scopes of ~/.claude.json. Tool arguments are read from stdin as a JSON object
+(no stdin, or a TTY, means no arguments); the tool payload goes to stdout.
+
+Examples:
+  echo '{"libraryName": "Go"}' | mcp-cli context7 resolve-library-id
+  mcp-cli gitea get_me < /dev/null`,
+		Args:          cobra.ExactArgs(2),
+		Version:       getVersion(),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			cfg, err := findServerConfig(args[0], cwd, home)
+			if err != nil {
+				return err
+			}
+			arguments, err := readArguments(os.Stdin)
+			if err != nil {
+				return err
+			}
+
+			var errlog io.Writer = io.Discard
+			if verbose {
+				errlog = os.Stderr
+			}
+			result, err := callTool(cmd.Context(), cfg, args[1], arguments, errlog)
+			if err != nil {
+				return err
+			}
+			payload, err := renderPayload(result)
+			if err != nil {
+				return err
+			}
+			if result.IsError {
+				return fmt.Errorf("%s", payload)
+			}
+			fmt.Println(payload)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Pass the MCP server stderr through instead of discarding it.")
+	cmd.SetVersionTemplate("{{.Version}}\n")
+	cmd.CompletionOptions.DisableDefaultCmd = true
+	return cmd
+}
+
+func main() {
+	if err := callToolCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
