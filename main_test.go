@@ -199,3 +199,11 @@ func TestCommandVerboseForwardsServerStderr(t *testing.T) {
 		t.Errorf("got %q", out)
 	}
 }
+
+func TestCommandFailsWhenServerCannotBeReached(t *testing.T) {
+	unreachable := &serverConfig{Command: filepath.Join(t.TempDir(), "nonexistent-server")}
+
+	if _, err := runCommand(t, map[string]*serverConfig{"mock": unreachable}, "", "mock", "echo"); err == nil {
+		t.Fatal("expected an error when the server cannot be started")
+	}
+}
