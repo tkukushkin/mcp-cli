@@ -29,17 +29,15 @@ from the [releases page](https://github.com/tkukushkin/mcp-cli/releases).
 ## Usage
 
 ```console
-mcp-cli [-v] <server> <tool>
-mcp-cli --version
+mcp-cli <server> <tool>
 ```
 
 - `<server>` — the name as it appears in `claude mcp list`.
 - `<tool>` — the bare tool name, without the `mcp__<server>__` prefix.
 - **Arguments** are a JSON object on stdin. For a tool that takes none, use
   `< /dev/null` — or just run it interactively, since a TTY stdin also means `{}`.
-- **stdout** is the tool's payload, not the MCP envelope: `structuredContent` as
-  compact JSON when the server provides it, otherwise the text content as-is (which
-  may itself be JSON — pipe it to `jq` as needed).
+- **stdout** is the tool's payload: `structuredContent` as compact JSON when the server provides it,
+  otherwise the text content as-is (which may itself be JSON — pipe it to `jq` as needed).
 - **Exit code** is 0 on success, 1 on failure, with the error text on stderr
   (server not found, connection failure, or the tool's own error message).
 
