@@ -6,16 +6,12 @@
 A single-binary MCP client for the shell. It calls one tool on one MCP server and
 prints the bare payload — no envelope, no session juggling, no hand-built JSON-RPC.
 
-Servers are not configured twice: `mcp` reads the same configuration Claude Code
+Servers are not configured twice: `mcp-cli` reads the same configuration Claude Code
 uses, so anything in `claude mcp list` is callable from a script.
 
 ```console
-echo '{"libraryName": "Go"}' | mcp context7 resolve-library-id > result.json
-jq -r '.libraries[0].id' result.json
+echo '{"libraryName": "Go", "query": "http server"}' | mcp-cli context7 resolve-library-id
 ```
-
-Handy for shell pipelines, cron jobs, CI steps — and for AI agents, which can feed a
-`jq` projection of a large result into their context instead of the whole thing.
 
 ## Install
 
@@ -37,7 +33,7 @@ mcp-cli <server> <tool>
 - **Arguments** are a JSON object on stdin. For a tool that takes none, use
   `< /dev/null` — or just run it interactively, since a TTY stdin also means `{}`.
 - **stdout** is the tool's payload: `structuredContent` as compact JSON when the server provides it,
-  otherwise the text content as-is (which may itself be JSON — pipe it to `jq` as needed).
+  otherwise the text content as-is (which may itself be JSON).
 - **Exit code** is 0 on success, 1 on failure, with the error text on stderr
   (server not found, connection failure, or the tool's own error message).
 

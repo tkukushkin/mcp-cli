@@ -50,15 +50,6 @@ func callToolCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp-cli <server> <tool>",
 		Short: "Call an MCP tool of a server configured for Claude Code.",
-		Long: `Call an MCP tool of a server configured for Claude Code.
-
-The server is looked up by name in ./.mcp.json, then in the local and user
-scopes of ~/.claude.json. Tool arguments are read from stdin as a JSON object
-(no stdin, or a TTY, means no arguments); the tool payload goes to stdout.
-
-Examples:
-  echo '{"libraryName": "Go"}' | mcp-cli context7 resolve-library-id
-  mcp-cli gitea get_me < /dev/null`,
 		Args:          cobra.ExactArgs(2),
 		Version:       getVersion(),
 		SilenceUsage:  true,
