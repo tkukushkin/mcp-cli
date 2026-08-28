@@ -47,29 +47,11 @@ No config file of its own. Servers are looked up by name, first match wins:
 
 ## OAuth
 
-Servers authenticated through `claude mcp login` work: `mcp-cli` reads the access token
-Claude Code already holds for that server and sends it as a bearer token. Nothing to log
-in to twice.
+Servers behind `claude mcp login` work: the access token Claude Code holds for the server
+is sent as a bearer token.
 
-The token is read from wherever Claude Code keeps its credentials — the Keychain on
-macOS, `~/.claude/.credentials.json` on Linux and Windows, or `$CLAUDE_CONFIG_DIR`
-when that is set. `CLAUDE_CONFIG_DIR` takes precedence everywhere, including macOS.
-
-Two deliberate limits:
-
-- **Only the access token is used, never the refresh token.** Refresh tokens rotate:
-  refreshing here would invalidate the copy Claude Code holds and log the harness out
-  of that server. When the stored token has expired, `mcp-cli` says so and stops rather
-  than refreshing it — call the server once from Claude Code and it refreshes itself.
-- **Nothing is ever written back.** No lock, no race with Claude Code over the same
-  credential store.
-
-An `Authorization` header in the server's own config always wins, so an entry with a
-static token keeps working untouched. If no stored session exists, the call goes out
-unauthenticated and the server decides.
-
-The credential format is not a documented interface, so a Claude Code update can change
-it. When that happens `mcp-cli` falls back to calling unauthenticated rather than failing.
+It is never refreshed, so a token that has expired is reported as such — call the server
+once from Claude Code and it refreshes itself.
 
 ## Scope
 
