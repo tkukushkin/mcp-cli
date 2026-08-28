@@ -48,13 +48,12 @@ func readArguments(stdin *os.File) (map[string]any, error) {
 func callToolCmd() *cobra.Command {
 	var verbose bool
 	cmd := &cobra.Command{
-		Use:   "mcp-cli <server> <tool>",
-		Short: "Call an MCP tool of a server configured for Claude Code.",
-		Args:          cobra.ExactArgs(2),
-		Version:       getVersion(),
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Use:     "mcp-cli <server> <tool>",
+		Short:   "Call an MCP tool of a server configured for Claude Code.",
+		Args:    cobra.ExactArgs(2),
+		Version: getVersion(),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
@@ -99,7 +98,6 @@ func callToolCmd() *cobra.Command {
 
 func main() {
 	if err := callToolCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
