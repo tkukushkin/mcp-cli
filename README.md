@@ -1,0 +1,63 @@
+# mcp-cli
+
+[![Test](https://github.com/tkukushkin/mcp-cli/actions/workflows/test.yml/badge.svg)](https://github.com/tkukushkin/mcp-cli/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/tkukushkin/mcp-cli/graph/badge.svg)](https://codecov.io/gh/tkukushkin/mcp-cli)
+
+A single-binary MCP client for the shell. It calls one tool on one MCP server and
+prints the bare payload — no envelope, no session juggling, no hand-built JSON-RPC.
+
+Servers are not configured twice: `mcp` reads the same configuration Claude Code
+uses, so anything in `claude mcp list` is callable from a script.
+
+```console
+$ echo '{"libraryName": "Go"}' | mcp context7 resolve-library-id > result.json
+$ jq -r '.libraries[0].id' result.json
+```
+
+Handy for shell pipelines, cron jobs, CI steps — and for AI agents, which can feed a
+`jq` projection of a large result into their context instead of the whole thing.
+
+## Install
+
+```console
+go install github.com/tkukushkin/mcp-cli@latest
+```
+
+Or grab a prebuilt binary for `darwin`, `linux` or `windows` on `amd64`/`arm64`
+from the [releases page](https://github.com/tkukushkin/mcp-cli/releases).
+
+## Usage
+
+```console
+mcp-cli [-v] <server> <tool>
+mcp-cli --version
+```
+
+- `<server>` — the name as it appears in `claude mcp list`.
+- `<tool>` — the bare tool name, without the `mcp__<server>__` prefix.
+- **Arguments** are a JSON object on stdin. For a tool that takes none, use
+  `< /dev/null` — or just run it interactively, since a TTY stdin also means `{}`.
+- **stdout** is the tool's payload, not the MCP envelope: `structuredContent` as
+  compact JSON when the server provides it, otherwise the text content as-is (which
+  may itself be JSON — pipe it to `jq` as needed).
+- **Exit code** is 0 on success, 1 on failure, with the error text on stderr
+  (server not found, connection failure, or the tool's own error message).
+
+## Configuration
+
+No config file of its own. Servers are looked up by name, first match wins:
+
+1. `./.mcp.json` — `mcpServers` (project scope)
+2. `~/.claude.json` — `projects["$PWD"].mcpServers` (local scope)
+3. `~/.claude.json` — `mcpServers` (user scope)
+
+Servers authenticated through `claude mcp login` (OAuth) are not supported yet.
+
+## Scope
+
+`tools/call` only, deliberately. Discovery (`tools/list`, resources, prompts) is what
+an MCP host is for; this is the escape hatch for when you're not in one.
+
+## License
+
+MIT
