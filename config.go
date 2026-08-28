@@ -14,6 +14,9 @@ type serverConfig struct {
 	Env     map[string]string `json:"env"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
+
+	// Name is the key this entry was found under; it identifies the server's OAuth session.
+	Name string `json:"-"`
 }
 
 // claudeConfig covers both .mcp.json (mcpServers only) and ~/.claude.json (both fields).
@@ -61,6 +64,7 @@ func findServerConfig(name, cwd, home string) (*serverConfig, error) {
 
 	for _, servers := range scopes {
 		if cfg, ok := servers[name]; ok {
+			cfg.Name = name
 			return &cfg, nil
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -21,6 +22,9 @@ const tokenEnv = "MCP_CLI_TEST_TOKEN"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(serverEnv) == "" {
+		// Point credential lookup at an empty directory so no test ever reads the real
+		// Keychain or sends a real token to a test server.
+		os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.TempDir(), "mcp-cli-without-credentials"))
 		os.Exit(m.Run())
 	}
 	fmt.Fprintln(os.Stderr, "mock server started")

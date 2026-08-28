@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,11 +26,39 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-func newTransport(cfg *serverConfig, errlog io.Writer) (mcp.Transport, error) {
+// authorize adds the OAuth token Claude Code holds for this server, unless the config
+// already carries an Authorization header of its own.
+func authorize(ctx context.Context, cfg *serverConfig) (map[string]string, error) {
+	headers := maps.Clone(cfg.Headers)
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	if _, ok := headers["Authorization"]; ok {
+		return headers, nil
+	}
+	credentials, err := readClaudeCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	token, err := oauthToken(credentials, cfg.Name)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+	return headers, nil
+}
+
+func newTransport(ctx context.Context, cfg *serverConfig, errlog io.Writer) (mcp.Transport, error) {
 	if cfg.URL != "" {
+		headers, err := authorize(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
 		return &mcp.StreamableClientTransport{
 			Endpoint:   cfg.URL,
-			HTTPClient: &http.Client{Transport: &headerRoundTripper{headers: cfg.Headers}},
+			HTTPClient: &http.Client{Transport: &headerRoundTripper{headers: headers}},
 		}, nil
 	}
 	if cfg.Command == "" {
@@ -45,7 +74,7 @@ func newTransport(cfg *serverConfig, errlog io.Writer) (mcp.Transport, error) {
 }
 
 func callTool(ctx context.Context, cfg *serverConfig, tool string, arguments map[string]any, errlog io.Writer) (*mcp.CallToolResult, error) {
-	transport, err := newTransport(cfg, errlog)
+	transport, err := newTransport(ctx, cfg, errlog)
 	if err != nil {
 		return nil, err
 	}

@@ -57,7 +57,7 @@ func TestRenderPayloadFallsBackToWholeResult(t *testing.T) {
 func TestNewTransportStdioMergesEnv(t *testing.T) {
 	t.Setenv("MCP_CLI_TEST_INHERITED", "yes")
 
-	transport, err := newTransport(&serverConfig{Command: "srv", Args: []string{"-x"}, Env: map[string]string{"TOKEN": "secret"}}, os.Stderr)
+	transport, err := newTransport(t.Context(), &serverConfig{Command: "srv", Args: []string{"-x"}, Env: map[string]string{"TOKEN": "secret"}}, os.Stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestNewTransportStdioMergesEnv(t *testing.T) {
 }
 
 func TestNewTransportHTTP(t *testing.T) {
-	transport, err := newTransport(&serverConfig{URL: "https://example.test/mcp"}, os.Stderr)
+	transport, err := newTransport(t.Context(), &serverConfig{URL: "https://example.test/mcp"}, os.Stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestNewTransportHTTP(t *testing.T) {
 }
 
 func TestNewTransportRejectsEmptyConfig(t *testing.T) {
-	if _, err := newTransport(&serverConfig{}, os.Stderr); err == nil {
+	if _, err := newTransport(t.Context(), &serverConfig{}, os.Stderr); err == nil {
 		t.Fatal("expected an error for a config with neither url nor command")
 	}
 }
