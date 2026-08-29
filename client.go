@@ -36,11 +36,11 @@ func authorize(ctx context.Context, cfg *serverConfig) (map[string]string, error
 	if _, ok := headers["Authorization"]; ok {
 		return headers, nil
 	}
-	credentials, err := readClaudeCredentials(ctx)
+	credentials, err := readClaudeCredentials()
 	if err != nil {
 		return nil, err
 	}
-	token, err := oauthToken(credentials, cfg.Name)
+	token, err := oauthToken(ctx, credentials, cfg.Name)
 	if err != nil {
 		return nil, err
 	}

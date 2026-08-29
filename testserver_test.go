@@ -24,8 +24,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv(serverEnv) == "" {
 		// Keep every test off the real Keychain, so none of them can send a real token
 		// to a test server. Credentials then come from CLAUDE_CONFIG_DIR alone.
-		keychainCredentials = func(context.Context) ([]byte, error) {
+		keychainCredentials = func() ([]byte, error) {
 			return nil, errors.New("keychain disabled in tests")
+		}
+		writeKeychainCredentials = func([]byte) error {
+			return errors.New("keychain disabled in tests")
 		}
 		os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.TempDir(), "mcp-cli-without-credentials"))
 		os.Exit(m.Run())

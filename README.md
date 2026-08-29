@@ -50,8 +50,8 @@ No config file of its own. Servers are looked up by name, first match wins:
 Servers behind `claude mcp login` work: the access token Claude Code holds for the server
 is sent as a bearer token.
 
-It is never refreshed, so a token that has expired is reported as such — call the server
-once from Claude Code and it refreshes itself.
+An expired token is refreshed against the authorization server and written back where
+Claude Code keeps it, which is what Claude Code does with its own refreshes.
 
 ## Scope
 

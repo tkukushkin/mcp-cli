@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"io"
 	"path/filepath"
@@ -23,7 +22,7 @@ func credentialsJSON(serverName string, expiresAt time.Time, token string) strin
 func TestOAuthTokenFindsAValidToken(t *testing.T) {
 	credentials := credentialsJSON("fastmail", time.Now().Add(time.Hour), "live-token")
 
-	token, err := oauthToken([]byte(credentials), "fastmail")
+	token, err := oauthToken(t.Context(), []byte(credentials), "fastmail")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +34,7 @@ func TestOAuthTokenFindsAValidToken(t *testing.T) {
 func TestOAuthTokenIgnoresOtherServers(t *testing.T) {
 	credentials := credentialsJSON("fastmail", time.Now().Add(time.Hour), "live-token")
 
-	token, err := oauthToken([]byte(credentials), "context7")
+	token, err := oauthToken(t.Context(), []byte(credentials), "context7")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,14 +43,15 @@ func TestOAuthTokenIgnoresOtherServers(t *testing.T) {
 	}
 }
 
-func TestOAuthTokenRejectsAnExpiredToken(t *testing.T) {
+// An expired token is refreshed, so an entry with nothing to refresh with is a dead end.
+func TestOAuthTokenReportsAnUnrefreshableEntry(t *testing.T) {
 	credentials := credentialsJSON("fastmail", time.Now().Add(-time.Minute), "stale-token")
 
-	_, err := oauthToken([]byte(credentials), "fastmail")
+	_, err := oauthToken(t.Context(), []byte(credentials), "fastmail")
 	if err == nil {
-		t.Fatal("expected an error for an expired token")
+		t.Fatal("expected an error for an entry that cannot be refreshed")
 	}
-	if !strings.Contains(err.Error(), "expired") {
+	if !strings.Contains(err.Error(), "nothing to refresh with") {
 		t.Errorf("got %v", err)
 	}
 }
@@ -63,7 +63,7 @@ func TestOAuthTokenPrefersTheFreshestEntry(t *testing.T) {
 		"fastmail|new": {"serverName": "fastmail", "accessToken": "new", "expiresAt": ` + strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10) + `}
 	}}`
 
-	token, err := oauthToken([]byte(credentials), "fastmail")
+	token, err := oauthToken(t.Context(), []byte(credentials), "fastmail")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestOAuthTokenPrefersTheFreshestEntry(t *testing.T) {
 }
 
 func TestOAuthTokenWithoutCredentials(t *testing.T) {
-	token, err := oauthToken(nil, "fastmail")
+	token, err := oauthToken(t.Context(), nil, "fastmail")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestOAuthTokenWithoutCredentials(t *testing.T) {
 
 // A Claude Code update may change the format; an unauthenticated call beats a hard failure.
 func TestOAuthTokenIgnoresMalformedCredentials(t *testing.T) {
-	token, err := oauthToken([]byte(`{"mcpOAuth": `), "fastmail")
+	token, err := oauthToken(t.Context(), []byte(`{"mcpOAuth": `), "fastmail")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func fakeKeychain(t *testing.T, credentials []byte, err error) {
 	t.Helper()
 	original := keychainCredentials
 	t.Cleanup(func() { keychainCredentials = original })
-	keychainCredentials = func(context.Context) ([]byte, error) { return credentials, err }
+	keychainCredentials = func() ([]byte, error) { return credentials, err }
 }
 
 // CLAUDE_CONFIG_DIR relocates .credentials.json on Linux and Windows, but macOS keeps
@@ -148,11 +148,11 @@ func TestReadClaudeCredentialsPrefersTheKeychainOnMacOS(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	fakeKeychain(t, []byte(credentialsJSON("mock", time.Now().Add(time.Hour), "from-keychain")), nil)
 
-	credentials, err := readClaudeCredentials(t.Context())
+	credentials, err := readClaudeCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := oauthToken(credentials, "mock")
+	token, err := oauthToken(t.Context(), credentials, "mock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +174,11 @@ func TestReadClaudeCredentialsWithoutAKeychainEntry(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	fakeKeychain(t, nil, errors.New("no keychain entry"))
 
-	credentials, err := readClaudeCredentials(t.Context())
+	credentials, err := readClaudeCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := oauthToken(credentials, "mock")
+	token, err := oauthToken(t.Context(), credentials, "mock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,16 +272,5 @@ func TestCallToolSendsTheStoredToken(t *testing.T) {
 	}
 	if got := recorder.get("Authorization"); got != "Bearer stored-token" {
 		t.Errorf("Authorization header = %q", got)
-	}
-}
-
-func TestCallToolReportsAnExpiredSession(t *testing.T) {
-	useCredentials(t, credentialsJSON("mock", time.Now().Add(-time.Hour), "stale-token"))
-	cfg, _ := httpConfig(t, nil)
-	cfg.Name = "mock"
-
-	_, err := callTool(t.Context(), cfg, "echo", nil, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("got %v, want an expiry error", err)
 	}
 }
