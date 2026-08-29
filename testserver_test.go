@@ -22,8 +22,11 @@ const tokenEnv = "MCP_CLI_TEST_TOKEN"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(serverEnv) == "" {
-		// Point credential lookup at an empty directory so no test ever reads the real
-		// Keychain or sends a real token to a test server.
+		// Keep every test off the real Keychain, so none of them can send a real token
+		// to a test server. Credentials then come from CLAUDE_CONFIG_DIR alone.
+		keychainCredentials = func(context.Context) ([]byte, error) {
+			return nil, errors.New("keychain disabled in tests")
+		}
 		os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.TempDir(), "mcp-cli-without-credentials"))
 		os.Exit(m.Run())
 	}

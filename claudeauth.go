@@ -47,16 +47,24 @@ func readCredentialsFile() ([]byte, error) {
 	return data, err
 }
 
+// keychainCredentials reads the macOS Keychain entry. Tests replace it so that they never
+// read the real one, nor send a real token to a test server.
+var keychainCredentials = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService, "-w").Output()
+}
+
 // readClaudeCredentials returns Claude Code's credential blob, or nil when there is none.
-// macOS keeps it in the Keychain; Linux and Windows keep it in a file. An explicit
-// CLAUDE_CONFIG_DIR wins everywhere, which also keeps tests off the real Keychain.
+// macOS keeps it in the Keychain, which CLAUDE_CONFIG_DIR does not relocate; Linux and
+// Windows keep it in a file. There is no cross-reading: on macOS a .credentials.json is
+// one Claude Code itself treats as stale and deletes, so an unauthenticated call beats
+// a token from it.
 func readClaudeCredentials(ctx context.Context) ([]byte, error) {
-	if os.Getenv("CLAUDE_CONFIG_DIR") != "" || runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" {
 		return readCredentialsFile()
 	}
-	data, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService, "-w").Output()
+	data, err := keychainCredentials(ctx)
 	if err != nil {
-		return readCredentialsFile()
+		return nil, nil
 	}
 	return data, nil
 }

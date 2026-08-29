@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -129,13 +132,79 @@ func TestReadCredentialsFileWithoutAFile(t *testing.T) {
 	}
 }
 
-// withCredentials points credential lookup at a file holding a live token for serverName.
-func withCredentials(t *testing.T, serverName, token string) {
+func fakeKeychain(t *testing.T, credentials []byte, err error) {
 	t.Helper()
+	original := keychainCredentials
+	t.Cleanup(func() { keychainCredentials = original })
+	keychainCredentials = func(context.Context) ([]byte, error) { return credentials, err }
+}
+
+// CLAUDE_CONFIG_DIR relocates .credentials.json on Linux and Windows, but macOS keeps
+// credentials in the Keychain regardless, so there the Keychain must still win.
+func TestReadClaudeCredentialsPrefersTheKeychainOnMacOS(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".credentials.json"),
-		credentialsJSON(serverName, time.Now().Add(time.Hour), token))
+		credentialsJSON("mock", time.Now().Add(time.Hour), "from-file"))
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	fakeKeychain(t, []byte(credentialsJSON("mock", time.Now().Add(time.Hour), "from-keychain")), nil)
+
+	credentials, err := readClaudeCredentials(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := oauthToken(credentials, "mock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "from-file"
+	if runtime.GOOS == "darwin" {
+		want = "from-keychain"
+	}
+	if token != want {
+		t.Errorf("got %q, want %q on %s", token, want, runtime.GOOS)
+	}
+}
+
+// Without a Keychain entry macOS reports no credentials rather than reading a file that
+// Claude Code would have deleted; other platforms read the file, which is their only store.
+func TestReadClaudeCredentialsWithoutAKeychainEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".credentials.json"),
+		credentialsJSON("mock", time.Now().Add(time.Hour), "from-file"))
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	fakeKeychain(t, nil, errors.New("no keychain entry"))
+
+	credentials, err := readClaudeCredentials(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := oauthToken(credentials, "mock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "from-file"
+	if runtime.GOOS == "darwin" {
+		want = ""
+	}
+	if token != want {
+		t.Errorf("got %q, want %q on %s", token, want, runtime.GOOS)
+	}
+}
+
+// useCredentials fills both stores, so a test reads the same blob on macOS (Keychain)
+// as on Linux and Windows (file).
+func useCredentials(t *testing.T, credentials string) {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".credentials.json"), credentials)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	fakeKeychain(t, []byte(credentials), nil)
+}
+
+// withCredentials gives Claude Code a live token for serverName.
+func withCredentials(t *testing.T, serverName, token string) {
+	t.Helper()
+	useCredentials(t, credentialsJSON(serverName, time.Now().Add(time.Hour), token))
 }
 
 func TestAuthorizeAddsTheStoredToken(t *testing.T) {
@@ -207,10 +276,7 @@ func TestCallToolSendsTheStoredToken(t *testing.T) {
 }
 
 func TestCallToolReportsAnExpiredSession(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".credentials.json"),
-		credentialsJSON("mock", time.Now().Add(-time.Hour), "stale-token"))
-	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	useCredentials(t, credentialsJSON("mock", time.Now().Add(-time.Hour), "stale-token"))
 	cfg, _ := httpConfig(t, nil)
 	cfg.Name = "mock"
 
