@@ -74,6 +74,22 @@ func TestNewTransportStdioMergesEnv(t *testing.T) {
 	}
 }
 
+func TestNewTransportStdioSetsCwd(t *testing.T) {
+	dir := t.TempDir()
+
+	transport, err := newTransport(t.Context(), &serverConfig{Command: "pwd", Cwd: dir}, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, ok := transport.(*mcp.CommandTransport)
+	if !ok {
+		t.Fatalf("got %T, want *mcp.CommandTransport", transport)
+	}
+	if command.Command.Dir != dir {
+		t.Errorf("cmd.Dir = %q, want %q", command.Command.Dir, dir)
+	}
+}
+
 func TestNewTransportHTTP(t *testing.T) {
 	transport, err := newTransport(t.Context(), &serverConfig{URL: "https://example.test/mcp"}, os.Stderr)
 	if err != nil {

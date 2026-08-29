@@ -79,28 +79,14 @@ func writeCredentialsFile(data []byte) error {
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".credentials-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary.Name(), path)
+	return writeFileAtomically(path, data)
 }
 
 // The Keychain accessors are indirected so that tests can replace them: no test may read
 // the real entry, send a real token to a test server, or write to the real store.
 var (
-	keychainCredentials      = readKeychain
-	writeKeychainCredentials = writeKeychain
+	keychainCredentials      = func(ctx context.Context) ([]byte, error) { return readKeychain(ctx, keychainService) }
+	writeKeychainCredentials = func(ctx context.Context, data []byte) error { return writeKeychain(ctx, keychainService, data) }
 )
 
 // readClaudeCredentials returns Claude Code's credential blob, or nil when there is none.

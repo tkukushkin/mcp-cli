@@ -42,6 +42,12 @@ func TestMain(m *testing.M) {
 	writeKeychainCredentials = func(context.Context, []byte) error {
 		return errors.New("keychain disabled in tests")
 	}
+	// Codex's stores are kept off the real keyring for the same reason: a test must never
+	// read a real session or write to one.
+	codexKeyringGet = func(context.Context, string, string) (string, error) { return "", nil }
+	codexKeyringSet = func(context.Context, string, string, string) error {
+		return errors.New("keyring disabled in tests")
+	}
 	os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.TempDir(), "mcp-cli-without-credentials"))
 
 	dir, err := installFakeSecurity()

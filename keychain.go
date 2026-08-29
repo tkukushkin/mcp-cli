@@ -37,10 +37,10 @@ var keychainAvailable = runtime.GOOS == "darwin"
 // means there are no credentials rather than that they could not be read.
 var errKeychainNoEntry = errors.New("no Keychain entry")
 
-func keychainFailure(err error) error {
+func keychainFailure(err error, service string) error {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 44 {
-		return fmt.Errorf("%w for %q", errKeychainNoEntry, keychainService)
+		return fmt.Errorf("%w for %q", errKeychainNoEntry, service)
 	}
 	return err
 }
@@ -51,19 +51,19 @@ var keychainAccountPattern = regexp.MustCompile(`"acct"<blob>=(?:0x([0-9A-Fa-f]+
 
 // keychainAccount reports which account the entry is filed under, so an update replaces it
 // instead of adding a second entry beside it.
-func keychainAccount(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService).CombinedOutput()
+func keychainAccount(ctx context.Context, service string) (string, error) {
+	out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", service).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("no %q Keychain entry: %w", keychainService, keychainFailure(err))
+		return "", fmt.Errorf("no %q Keychain entry: %w", service, keychainFailure(err, service))
 	}
 	match := keychainAccountPattern.FindSubmatch(out)
 	if match == nil {
-		return "", fmt.Errorf("cannot read the account of the %q Keychain entry", keychainService)
+		return "", fmt.Errorf("cannot read the account of the %q Keychain entry", service)
 	}
 	if len(match[1]) > 0 {
 		decoded, err := hex.DecodeString(string(match[1]))
 		if err != nil {
-			return "", fmt.Errorf("cannot decode the account of the %q Keychain entry: %w", keychainService, err)
+			return "", fmt.Errorf("cannot decode the account of the %q Keychain entry: %w", service, err)
 		}
 		return string(decoded), nil
 	}
@@ -73,10 +73,18 @@ func keychainAccount(ctx context.Context) (string, error) {
 // hexOnly matches the form `security` falls back to when the stored value is not printable.
 var hexOnly = regexp.MustCompile(`^(?:[0-9a-f]{2})+$`)
 
-func readKeychain(ctx context.Context) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService, "-w").Output()
+// findGenericPassword is what readKeychain and readKeychainAccount both boil down to: the
+// same lookup and hex-decoding, with the account omitted or pinned depending on whether the
+// caller already knows which entry it wants.
+func findGenericPassword(ctx context.Context, service, account string) ([]byte, error) {
+	args := []string{"find-generic-password", "-s", service}
+	if account != "" {
+		args = append(args, "-a", account)
+	}
+	args = append(args, "-w")
+	out, err := exec.CommandContext(ctx, "security", args...).Output()
 	if err != nil {
-		return nil, fmt.Errorf("cannot read the %q Keychain entry: %w", keychainService, keychainFailure(err))
+		return nil, fmt.Errorf("cannot read the %q Keychain entry: %w", service, keychainFailure(err, service))
 	}
 	value := strings.TrimRight(string(out), "\n")
 
@@ -85,24 +93,44 @@ func readKeychain(ctx context.Context) ([]byte, error) {
 	if hexOnly.MatchString(value) {
 		decoded, err := hex.DecodeString(value)
 		if err != nil {
-			return nil, fmt.Errorf("cannot decode the %q Keychain entry: %w", keychainService, err)
+			return nil, fmt.Errorf("cannot decode the %q Keychain entry: %w", service, err)
 		}
 		return decoded, nil
 	}
 	return []byte(value), nil
 }
 
-// writeKeychain replaces the entry's contents, keeping it open to every program. The -U flag
-// updates the entry in place and -A is what leaves the access control open.
-func writeKeychain(ctx context.Context, contents []byte) error {
-	account, err := keychainAccount(ctx)
+func readKeychain(ctx context.Context, service string) ([]byte, error) {
+	return findGenericPassword(ctx, service, "")
+}
+
+// readKeychainAccount reads the entry filed under a specific account, for a caller that
+// already knows the account (a store key from a previous write) and must not go through
+// keychainAccount's discover-the-account lookup, which would find the wrong entry once a
+// service holds more than one account.
+func readKeychainAccount(ctx context.Context, service, account string) ([]byte, error) {
+	return findGenericPassword(ctx, service, account)
+}
+
+// writeKeychainAccount replaces the contents of the entry filed under a known account,
+// keeping it open to every program. The -U flag updates the entry in place and -A is what
+// leaves the access control open.
+func writeKeychainAccount(ctx context.Context, service, account string, contents []byte) error {
+	cmd := exec.CommandContext(ctx, "security", "add-generic-password",
+		"-U", "-A", "-s", service, "-a", account, "-w", string(contents))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("cannot update the %q Keychain entry: %w: %s", service, err, out)
+	}
+	return nil
+}
+
+// writeKeychain replaces the entry's contents, discovering which account it is filed under
+// first. A caller that already knows the account should use writeKeychainAccount instead, so
+// that it writes to the entry it means rather than whichever one keychainAccount finds first.
+func writeKeychain(ctx context.Context, service string, contents []byte) error {
+	account, err := keychainAccount(ctx, service)
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "security", "add-generic-password",
-		"-U", "-A", "-s", keychainService, "-a", account, "-w", string(contents))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("cannot update the %q Keychain entry: %w: %s", keychainService, err, out)
-	}
-	return nil
+	return writeKeychainAccount(ctx, service, account, contents)
 }

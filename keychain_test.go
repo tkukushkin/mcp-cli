@@ -152,10 +152,13 @@ func fakeSecurity(t *testing.T, value string, exists bool) (store string, invoca
 	}
 }
 
+// testService stands in for keychainService: the tests never touch Claude Code's real entry.
+const testService = "mcp-cli-test-service"
+
 func TestReadKeychain(t *testing.T) {
 	fakeSecurity(t, `{"mcpOAuth": {}}`, true)
 
-	data, err := readKeychain(t.Context())
+	data, err := readKeychain(t.Context(), testService)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +171,7 @@ func TestReadKeychain(t *testing.T) {
 func TestReadKeychainDecodesHex(t *testing.T) {
 	fakeSecurity(t, "7b2261223a20317d", true)
 
-	data, err := readKeychain(t.Context())
+	data, err := readKeychain(t.Context(), testService)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +184,7 @@ func TestReadKeychainDecodesHex(t *testing.T) {
 func TestReadKeychainLeavesJSONAlone(t *testing.T) {
 	fakeSecurity(t, `{"beef": "cafe"}`, true)
 
-	data, err := readKeychain(t.Context())
+	data, err := readKeychain(t.Context(), testService)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,10 +193,36 @@ func TestReadKeychainLeavesJSONAlone(t *testing.T) {
 	}
 }
 
+// readKeychainAccount is what the next harness's token refresh uses: it already knows the
+// account (the store key) and must not go through the discover-the-account path.
+func TestReadKeychainAccountRetrievesEntryWrittenUnderExplicitAccount(t *testing.T) {
+	store, invocations := fakeSecurity(t, "value-for-explicit-account", true)
+	if err := os.WriteFile(store+".account", []byte("explicit-account"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := readKeychainAccount(t.Context(), testService, "explicit-account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "value-for-explicit-account" {
+		t.Errorf("got %q", data)
+	}
+	var find string
+	for _, line := range invocations() {
+		if strings.HasPrefix(line, "find-generic-password") {
+			find = line
+		}
+	}
+	if !strings.Contains(find, "-a explicit-account") {
+		t.Errorf("the account was not passed to security: %q", find)
+	}
+}
+
 func TestWriteKeychainReplacesTheContents(t *testing.T) {
 	store, _ := fakeSecurity(t, `{"mcpOAuth": {}}`, true)
 
-	if err := writeKeychain(t.Context(), []byte(`{"mcpOAuth": {"a": 1}}`)); err != nil {
+	if err := writeKeychain(t.Context(), testService, []byte(`{"mcpOAuth": {"a": 1}}`)); err != nil {
 		t.Fatal(err)
 	}
 	written, err := os.ReadFile(store)
@@ -210,7 +239,7 @@ func TestWriteKeychainReplacesTheContents(t *testing.T) {
 func TestWriteKeychainUpdatesInPlaceAndStaysOpen(t *testing.T) {
 	_, invocations := fakeSecurity(t, "before", true)
 
-	if err := writeKeychain(t.Context(), []byte("after")); err != nil {
+	if err := writeKeychain(t.Context(), testService, []byte("after")); err != nil {
 		t.Fatal(err)
 	}
 	var add string
@@ -232,7 +261,7 @@ func TestWriteKeychainUpdatesInPlaceAndStaysOpen(t *testing.T) {
 func TestKeychainWithoutAnEntry(t *testing.T) {
 	fakeSecurity(t, "", false)
 
-	_, err := readKeychain(t.Context())
+	_, err := readKeychain(t.Context(), testService)
 	if err == nil {
 		t.Error("expected an error reading a missing entry")
 	}
@@ -241,7 +270,7 @@ func TestKeychainWithoutAnEntry(t *testing.T) {
 	if !errors.Is(err, errKeychainNoEntry) {
 		t.Errorf("got %v, want a missing-entry error", err)
 	}
-	if err := writeKeychain(t.Context(), []byte("{}")); err == nil {
+	if err := writeKeychain(t.Context(), testService, []byte("{}")); err == nil {
 		t.Error("expected an error writing a missing entry")
 	}
 }
@@ -253,7 +282,7 @@ func TestKeychainAccountInHexForm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := writeKeychain(t.Context(), []byte("after")); err != nil {
+	if err := writeKeychain(t.Context(), testService, []byte("after")); err != nil {
 		t.Fatal(err)
 	}
 	var add string

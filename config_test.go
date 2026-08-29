@@ -8,15 +8,25 @@ import (
 )
 
 // setHome points os.UserHomeDir at dir. It reads USERPROFILE on Windows, so setting HOME
-// alone would leave the tests reading the real ~/.claude.json there.
+// alone would leave the tests reading the real ~/.claude.json there. It also neutralizes every
+// environment input selectHarness/findServer read from the real process — the harness markers,
+// the declared default, and $CODEX_HOME — so a test that runs the command end to end resolves
+// the same way regardless of which harness happens to be running the test suite itself.
 func setHome(t *testing.T, dir string) {
 	t.Helper()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
+	t.Setenv("CLAUDECODE", "")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("MCP_CLI_DEFAULT_HARNESS", "")
+	t.Setenv("CODEX_HOME", filepath.Join(dir, ".codex"))
 }
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

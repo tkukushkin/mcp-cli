@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
+
+var errServerNotFound = errors.New("MCP server not found")
 
 // serverConfig is one entry of the mcpServers map in Claude Code's configuration.
 type serverConfig struct {
@@ -20,6 +23,10 @@ type serverConfig struct {
 
 	// Name is the key this entry was found under; it identifies the server's OAuth session.
 	Name string `json:"-"`
+	// Cwd is the working directory for a stdio server, set only by Codex configs.
+	Cwd string `json:"-"`
+	// harness records which harness's config this entry came from; it routes the OAuth lookup.
+	harness harnessKind `json:"-"`
 }
 
 // claudeConfig covers both .mcp.json (mcpServers only) and ~/.claude.json (both fields).
@@ -75,7 +82,7 @@ func findServerConfig(name, cwd, home string) (*serverConfig, error) {
 			return cfg, expandVariables(cfg)
 		}
 	}
-	return nil, fmt.Errorf("MCP server %q not found in .mcp.json or ~/.claude.json", name)
+	return nil, fmt.Errorf("%w: %q is not in .mcp.json or ~/.claude.json; pass --harness codex to search Codex's configuration", errServerNotFound, name)
 }
 
 // findInDirectory looks in the local scope of one directory, then in its .mcp.json.
@@ -113,6 +120,7 @@ func lookupServer(name string, servers map[string]serverConfig) (*serverConfig, 
 		return nil, false
 	}
 	cfg.Name = name
+	cfg.harness = harnessClaude
 	return &cfg, true
 }
 
