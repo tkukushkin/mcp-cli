@@ -13,7 +13,8 @@ import (
 )
 
 // keychainService is the macOS Keychain entry Claude Code stores its credentials in.
-const keychainService = "Claude Code-credentials"
+// It is a variable so that the Keychain tests can work on an entry of their own.
+var keychainService = "Claude Code-credentials"
 
 // oauthEntry is one MCP OAuth session inside Claude Code's credential blob.
 type oauthEntry struct {
