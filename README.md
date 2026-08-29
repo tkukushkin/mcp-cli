@@ -39,11 +39,15 @@ mcp-cli <server> <tool>
 
 ## Configuration
 
-No config file of its own. Servers are looked up by name, first match wins:
+No config file of its own. Servers are looked up by name, first match wins, in the
+working directory and then in each directory above it:
 
-1. `./.mcp.json` — `mcpServers` (project scope)
-2. `~/.claude.json` — `projects["$PWD"].mcpServers` (local scope)
+1. `~/.claude.json` — `projects["<dir>"].mcpServers` (local scope)
+2. `<dir>/.mcp.json` — `mcpServers` (project scope)
 3. `~/.claude.json` — `mcpServers` (user scope)
+
+`${VAR}` and `${VAR:-default}` in a config value are expanded from the environment,
+as Claude Code expands them.
 
 ## OAuth
 

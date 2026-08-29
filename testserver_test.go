@@ -21,23 +21,37 @@ const serverEnv = "MCP_CLI_TEST_SERVER"
 const tokenEnv = "MCP_CLI_TEST_TOKEN"
 
 func TestMain(m *testing.M) {
-	if os.Getenv(serverEnv) == "" {
-		// Keep every test off the real Keychain, so none of them can send a real token
-		// to a test server. Credentials then come from CLAUDE_CONFIG_DIR alone.
-		keychainCredentials = func() ([]byte, error) {
-			return nil, errors.New("keychain disabled in tests")
+	// The server branch comes first: a test of the stdio transport may have a fake Keychain
+	// store in its environment too, and it still wants a server.
+	if os.Getenv(serverEnv) != "" {
+		fmt.Fprintln(os.Stderr, "mock server started")
+		if err := newTestServer().Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+			os.Exit(1)
 		}
-		writeKeychainCredentials = func([]byte) error {
-			return errors.New("keychain disabled in tests")
-		}
-		os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.TempDir(), "mcp-cli-without-credentials"))
-		os.Exit(m.Run())
+		os.Exit(0)
 	}
-	fmt.Fprintln(os.Stderr, "mock server started")
-	if err := newTestServer().Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	if store := os.Getenv(securityStoreEnv); store != "" {
+		os.Exit(runFakeSecurity(store, os.Args[1:]))
+	}
+
+	// Keep every test off the real Keychain, so none of them can send a real token
+	// to a test server. Credentials then come from CLAUDE_CONFIG_DIR alone.
+	keychainCredentials = func(context.Context) ([]byte, error) {
+		return nil, fmt.Errorf("keychain disabled in tests: %w", errKeychainNoEntry)
+	}
+	writeKeychainCredentials = func(context.Context, []byte) error {
+		return errors.New("keychain disabled in tests")
+	}
+	os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.TempDir(), "mcp-cli-without-credentials"))
+
+	dir, err := installFakeSecurity()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	os.Exit(0)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 type echoInput struct {

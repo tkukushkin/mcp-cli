@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"path/filepath"
@@ -21,7 +22,7 @@ func credentialsJSON(serverName string, expiresAt time.Time, token string) strin
 func TestOAuthTokenFindsAValidToken(t *testing.T) {
 	credentials := credentialsJSON("fastmail", time.Now().Add(time.Hour), "live-token")
 
-	token, err := oauthToken(t.Context(), []byte(credentials), "fastmail")
+	token, err := oauthToken(t.Context(), []byte(credentials), "fastmail", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestOAuthTokenFindsAValidToken(t *testing.T) {
 func TestOAuthTokenIgnoresOtherServers(t *testing.T) {
 	credentials := credentialsJSON("fastmail", time.Now().Add(time.Hour), "live-token")
 
-	token, err := oauthToken(t.Context(), []byte(credentials), "context7")
+	token, err := oauthToken(t.Context(), []byte(credentials), "context7", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestOAuthTokenIgnoresOtherServers(t *testing.T) {
 func TestOAuthTokenReportsAnUnrefreshableEntry(t *testing.T) {
 	credentials := credentialsJSON("fastmail", time.Now().Add(-time.Minute), "stale-token")
 
-	_, err := oauthToken(t.Context(), []byte(credentials), "fastmail")
+	_, err := oauthToken(t.Context(), []byte(credentials), "fastmail", "")
 	if err == nil {
 		t.Fatal("expected an error for an entry that cannot be refreshed")
 	}
@@ -62,7 +63,7 @@ func TestOAuthTokenPrefersTheFreshestEntry(t *testing.T) {
 		"fastmail|new": {"serverName": "fastmail", "accessToken": "new", "expiresAt": ` + strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10) + `}
 	}}`
 
-	token, err := oauthToken(t.Context(), []byte(credentials), "fastmail")
+	token, err := oauthToken(t.Context(), []byte(credentials), "fastmail", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +72,44 @@ func TestOAuthTokenPrefersTheFreshestEntry(t *testing.T) {
 	}
 }
 
+// Two projects can name different servers the same, and the token of one must not be sent
+// to the other.
+func TestOAuthTokenIgnoresASessionForAnotherURL(t *testing.T) {
+	credentials := `{"mcpOAuth": {"github|abc": {
+		"serverName": "github",
+		"serverUrl": "https://other.test/mcp",
+		"accessToken": "other-projects-token",
+		"expiresAt": ` + strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10) + `
+	}}}`
+
+	token, err := oauthToken(t.Context(), []byte(credentials), "github", "https://example.test/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		t.Errorf("got %q, want no token for a session of another server", token)
+	}
+}
+
+func TestOAuthTokenAcceptsTheSameURL(t *testing.T) {
+	credentials := `{"mcpOAuth": {"github|abc": {
+		"serverName": "github",
+		"serverUrl": "https://example.test/mcp/",
+		"accessToken": "this-projects-token",
+		"expiresAt": ` + strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10) + `
+	}}}`
+
+	token, err := oauthToken(t.Context(), []byte(credentials), "github", "https://example.test/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "this-projects-token" {
+		t.Errorf("got %q", token)
+	}
+}
+
 func TestOAuthTokenWithoutCredentials(t *testing.T) {
-	token, err := oauthToken(t.Context(), nil, "fastmail")
+	token, err := oauthToken(t.Context(), nil, "fastmail", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +120,7 @@ func TestOAuthTokenWithoutCredentials(t *testing.T) {
 
 // A Claude Code update may change the format; an unauthenticated call beats a hard failure.
 func TestOAuthTokenIgnoresMalformedCredentials(t *testing.T) {
-	token, err := oauthToken(t.Context(), []byte(`{"mcpOAuth": `), "fastmail")
+	token, err := oauthToken(t.Context(), []byte(`{"mcpOAuth": `), "fastmail", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +145,7 @@ func TestCredentialsFileHonoursClaudeConfigDir(t *testing.T) {
 func TestCredentialsFileFallsBackToTheClaudeDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	path, err := credentialsFile()
 	if err != nil {
@@ -135,7 +172,7 @@ func fakeKeychain(t *testing.T, credentials []byte, err error) {
 	t.Helper()
 	original := keychainCredentials
 	t.Cleanup(func() { keychainCredentials = original })
-	keychainCredentials = func() ([]byte, error) { return credentials, err }
+	keychainCredentials = func(context.Context) ([]byte, error) { return credentials, err }
 }
 
 // withKeychain fixes which store answers, so both are exercised wherever the tests run.
@@ -189,7 +226,7 @@ func TestReadClaudeCredentialsWithoutAKeychainEntry(t *testing.T) {
 	writeFile(t, filepath.Join(dir, ".credentials.json"),
 		credentialsJSON("mock", time.Now().Add(time.Hour), "from-file"))
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
-	fakeKeychain(t, nil, errors.New("no keychain entry"))
+	fakeKeychain(t, nil, errKeychainNoEntry)
 
 	token, err := storedToken(t, "mock")
 	if err != nil {
@@ -200,13 +237,24 @@ func TestReadClaudeCredentialsWithoutAKeychainEntry(t *testing.T) {
 	}
 }
 
+// A locked keychain or a denied prompt is not "no credentials": degrading it to an
+// unauthenticated call hides the real cause behind the server's 401.
+func TestReadClaudeCredentialsReportsAKeychainFailure(t *testing.T) {
+	withKeychain(t, true)
+	fakeKeychain(t, nil, errors.New("User interaction is not allowed"))
+
+	if _, err := readClaudeCredentials(t.Context()); err == nil {
+		t.Fatal("expected a Keychain read failure to surface")
+	}
+}
+
 func storedToken(t *testing.T, serverName string) (string, error) {
 	t.Helper()
-	credentials, err := readClaudeCredentials()
+	credentials, err := readClaudeCredentials(t.Context())
 	if err != nil {
 		return "", err
 	}
-	return oauthToken(t.Context(), credentials, serverName)
+	return oauthToken(t.Context(), credentials, serverName, "")
 }
 
 // useCredentials fills both stores, so a test reads the same blob on macOS (Keychain)
@@ -248,6 +296,22 @@ func TestAuthorizeKeepsAnExplicitHeader(t *testing.T) {
 	}
 	if headers["Authorization"] != "Bearer from-config" {
 		t.Errorf("got %q, want the header from the server config", headers["Authorization"])
+	}
+}
+
+// HTTP header names ignore case, so a lowercase one in the config is still the user's own
+// Authorization header and must not be joined by a second one.
+func TestAuthorizeKeepsAnExplicitHeaderWhateverItsCase(t *testing.T) {
+	withCredentials(t, "mock", "stored-token")
+	cfg := &serverConfig{Name: "mock", URL: "https://example.test/mcp",
+		Headers: map[string]string{"authorization": "Bearer from-config"}}
+
+	headers, err := authorize(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(headers) != 1 || headers["authorization"] != "Bearer from-config" {
+		t.Errorf("got %v, want only the header from the server config", headers)
 	}
 }
 

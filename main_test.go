@@ -125,7 +125,7 @@ func runCommand(t *testing.T, servers map[string]*serverConfig, stdin string, ar
 	}
 	writeFile(t, filepath.Join(dir, ".mcp.json"), string(config))
 	t.Chdir(dir)
-	t.Setenv("HOME", dir)
+	setHome(t, dir)
 
 	originalStdin := os.Stdin
 	os.Stdin = pipeWith(t, stdin)

@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +81,79 @@ func TestNewTransportHTTP(t *testing.T) {
 	}
 	if _, ok := transport.(*mcp.StreamableClientTransport); !ok {
 		t.Fatalf("got %T, want *mcp.StreamableClientTransport", transport)
+	}
+}
+
+func TestNewTransportSSE(t *testing.T) {
+	transport, err := newTransport(t.Context(), &serverConfig{Type: "sse", URL: "https://example.test/sse"}, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := transport.(*mcp.SSEClientTransport); !ok {
+		t.Fatalf("got %T, want *mcp.SSEClientTransport", transport)
+	}
+}
+
+// net/http drops Authorization when a redirect leaves the origin. Re-adding the configured
+// headers below that would hand the token to whatever host the server pointed at.
+func TestHeaderRoundTripperDropsHeadersOffTheConfiguredHost(t *testing.T) {
+	elsewhere := &headerRecorder{}
+	other := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		elsewhere.record(r.Header)
+	}))
+	t.Cleanup(other.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/mcp", http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+	endpoint, err := url.Parse(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Transport: &headerRoundTripper{
+		headers: map[string]string{"Authorization": "Bearer secret"},
+		host:    endpoint.Host,
+	}}
+	response, err := client.Get(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+
+	if got := elsewhere.get("Authorization"); got != "" {
+		t.Errorf("the token was sent to the redirect target: %q", got)
+	}
+}
+
+// The transport sets the protocol's own headers; a configured one must not overwrite them.
+func TestHeaderRoundTripperKeepsTheProtocolHeaders(t *testing.T) {
+	recorder := &headerRecorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		recorder.record(r.Header)
+	}))
+	t.Cleanup(server.Close)
+	request, err := http.NewRequest(http.MethodPost, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Accept", "text/event-stream")
+
+	transport := &headerRoundTripper{
+		headers: map[string]string{"Accept": "application/json", "X-Trace": "abc"},
+		host:    request.URL.Host,
+	}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+
+	if got := recorder.get("Accept"); got != "text/event-stream" {
+		t.Errorf("Accept = %q, want the transport's own value", got)
+	}
+	if got := recorder.get("X-Trace"); got != "abc" {
+		t.Errorf("X-Trace = %q, want the configured value", got)
 	}
 }
 

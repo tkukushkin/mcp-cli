@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -19,6 +21,7 @@ var keychainService = "Claude Code-credentials"
 // oauthEntry is one MCP OAuth session inside Claude Code's credential blob.
 type oauthEntry struct {
 	ServerName     string `json:"serverName"`
+	ServerURL      string `json:"serverUrl"`
 	AccessToken    string `json:"accessToken"`
 	RefreshToken   string `json:"refreshToken"`
 	ExpiresAt      int64  `json:"expiresAt"`
@@ -30,6 +33,16 @@ type oauthEntry struct {
 }
 
 func (e oauthEntry) expiry() time.Time { return time.UnixMilli(e.ExpiresAt) }
+
+// matchesURL reports whether this session belongs to the server the config names. Two projects
+// can give different servers the same name, and a token must not go to the wrong one. An entry
+// without a URL is accepted, as the only thing left to match it on is the name.
+func (e oauthEntry) matchesURL(serverURL string) bool {
+	if e.ServerURL == "" || serverURL == "" {
+		return true
+	}
+	return strings.TrimRight(e.ServerURL, "/") == strings.TrimRight(serverURL, "/")
+}
 
 func (e oauthEntry) authorizationServer() string {
 	if e.DiscoveryState.AuthorizationServerURL != "" {
@@ -95,28 +108,34 @@ var (
 // Windows keep it in a file. There is no cross-reading: on macOS a .credentials.json is
 // one Claude Code itself treats as stale and deletes, so an unauthenticated call beats
 // a token from it.
-func readClaudeCredentials() ([]byte, error) {
+func readClaudeCredentials(ctx context.Context) ([]byte, error) {
 	if !keychainAvailable {
 		return readCredentialsFile()
 	}
-	data, err := keychainCredentials()
-	if err != nil {
+	data, err := keychainCredentials(ctx)
+	// Only a missing entry means "no credentials". A locked keychain, a denied prompt or a
+	// missing `security` are failures to read them, and degrading those to an unauthenticated
+	// call sends the user debugging the server's 401 instead of the real cause.
+	if errors.Is(err, errKeychainNoEntry) {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return data, nil
 }
 
-func writeClaudeCredentials(data []byte) error {
+func writeClaudeCredentials(ctx context.Context, data []byte) error {
 	if !keychainAvailable {
 		return writeCredentialsFile(data)
 	}
-	return writeKeychainCredentials(data)
+	return writeKeychainCredentials(ctx, data)
 }
 
-// findOAuthEntry returns the freshest session stored for serverName, along with the key it
-// is filed under. Keys look like "<serverName>|<hash>", so the serverName field is matched
+// findOAuthEntry returns the freshest session stored for the named server, along with the key
+// it is filed under. Keys look like "<serverName>|<hash>", so the serverName field is matched
 // instead of the key, and re-authorizing can leave an older entry behind.
-func findOAuthEntry(credentials []byte, serverName string) (string, oauthEntry, bool) {
+func findOAuthEntry(credentials []byte, serverName, serverURL string) (string, oauthEntry, bool) {
 	var blob map[string]json.RawMessage
 	if err := json.Unmarshal(credentials, &blob); err != nil {
 		return "", oauthEntry{}, false
@@ -132,7 +151,10 @@ func findOAuthEntry(credentials []byte, serverName string) (string, oauthEntry, 
 		if err := json.Unmarshal(raw, &entry); err != nil {
 			continue
 		}
-		if entry.ServerName == serverName && entry.ExpiresAt >= found.ExpiresAt {
+		if entry.ServerName != serverName || !entry.matchesURL(serverURL) {
+			continue
+		}
+		if foundKey == "" || entry.ExpiresAt > found.ExpiresAt {
 			foundKey, found = key, entry
 		}
 	}
@@ -140,10 +162,21 @@ func findOAuthEntry(credentials []byte, serverName string) (string, oauthEntry, 
 }
 
 // storeRefreshedTokens writes the refreshed tokens back into the blob, touching only the
-// four fields that changed. Everything else — other servers, the Claude Code login itself,
-// fields this program does not model — is carried over verbatim, because dropping any of
-// it would log the user out.
-func storeRefreshedTokens(credentials []byte, key string, token *oauth2.Token) error {
+// fields that changed. Everything else — other servers, the Claude Code login itself, fields
+// this program does not model — is carried over verbatim, because dropping any of it would
+// log the user out.
+//
+// The blob is read again here rather than written back from the copy this run started with:
+// the refresh took two HTTP round trips, and a Claude Code session may have rotated its own
+// tokens in the meantime. Writing the whole store from a stale copy would undo that.
+//
+// ponytail: the re-read narrows the window but does not close it; the store has no lock, and
+// Claude Code writes it the same way. Locking is only worth it if a lost rotation is ever seen.
+func storeRefreshedTokens(ctx context.Context, key string, token *oauth2.Token) error {
+	credentials, err := readClaudeCredentials(ctx)
+	if err != nil {
+		return err
+	}
 	var blob map[string]json.RawMessage
 	if err := json.Unmarshal(credentials, &blob); err != nil {
 		return err
@@ -158,7 +191,11 @@ func storeRefreshedTokens(credentials []byte, key string, token *oauth2.Token) e
 	}
 
 	entry["accessToken"] = token.AccessToken
-	entry["expiresAt"] = token.Expiry.UnixMilli()
+	// A token endpoint may omit expires_in, which leaves the expiry zero; storing that would
+	// write a date in year 1 and leave the entry permanently in the past.
+	if !token.Expiry.IsZero() {
+		entry["expiresAt"] = token.Expiry.UnixMilli()
+	}
 	if token.RefreshToken != "" {
 		entry["refreshToken"] = token.RefreshToken
 	}
@@ -175,7 +212,7 @@ func storeRefreshedTokens(credentials []byte, key string, token *oauth2.Token) e
 	if err != nil {
 		return err
 	}
-	return writeClaudeCredentials(data)
+	return writeClaudeCredentials(ctx, data)
 }
 
 // refreshOAuthEntry exchanges the stored refresh token for a fresh access token. Claude Code
@@ -204,26 +241,30 @@ func refreshOAuthEntry(ctx context.Context, entry oauthEntry) (*oauth2.Token, er
 	return token, nil
 }
 
+// expiryMargin refreshes a token that is about to expire rather than sending it and losing the
+// call to a 401 mid-handshake. It is the margin oauth2.Token.Valid applies for the same reason.
+const expiryMargin = 10 * time.Second
+
 // oauthToken returns an access token for the named server, refreshing the stored one when it
 // has expired, or an empty string when Claude Code holds no session for that server.
-func oauthToken(ctx context.Context, credentials []byte, serverName string) (string, error) {
+func oauthToken(ctx context.Context, credentials []byte, serverName, serverURL string) (string, error) {
 	if len(credentials) == 0 {
 		return "", nil
 	}
 	// The credential format is not a documented interface. If a Claude Code update changes
 	// it, fall through to an unauthenticated call and let the server report the problem.
-	key, entry, found := findOAuthEntry(credentials, serverName)
+	key, entry, found := findOAuthEntry(credentials, serverName, serverURL)
 	if !found || entry.AccessToken == "" {
 		return "", nil
 	}
-	if time.Now().Before(entry.expiry()) {
+	if time.Now().Add(expiryMargin).Before(entry.expiry()) {
 		return entry.AccessToken, nil
 	}
 	token, err := refreshOAuthEntry(ctx, entry)
 	if err != nil {
 		return "", err
 	}
-	if err := storeRefreshedTokens(credentials, key, token); err != nil {
+	if err := storeRefreshedTokens(ctx, key, token); err != nil {
 		return "", fmt.Errorf("refreshed the OAuth token for %q but could not store it: %w", serverName, err)
 	}
 	return token.AccessToken, nil

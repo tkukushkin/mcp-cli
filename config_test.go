@@ -3,8 +3,17 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// setHome points os.UserHomeDir at dir. It reads USERPROFILE on Windows, so setting HOME
+// alone would leave the tests reading the real ~/.claude.json there.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -39,6 +48,75 @@ func TestFindServerConfigPrefersLocalScopeOverUserScope(t *testing.T) {
 	}
 	if cfg.Command != "local" {
 		t.Errorf("got %q, want %q", cfg.Command, "local")
+	}
+}
+
+// `claude mcp add -s local` is how a checked-in .mcp.json entry is overridden, so the local
+// scope has to win over the project one here as it does in Claude Code.
+func TestFindServerConfigPrefersLocalScopeOverProjectScope(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(cwd, ".mcp.json"), `{"mcpServers": {"srv": {"command": "project"}}}`)
+	writeFile(t, filepath.Join(home, ".claude.json"),
+		`{"projects": {"`+cwd+`": {"mcpServers": {"srv": {"command": "local"}}}}}`)
+
+	cfg, err := findServerConfig("srv", cwd, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Command != "local" {
+		t.Errorf("got %q, want %q", cfg.Command, "local")
+	}
+}
+
+// The project a server is configured for does not stop at its root directory: mcp-cli is run
+// from wherever the script happens to sit.
+func TestFindServerConfigSearchesParentDirectories(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers": {"srv": {"command": "project"}}}`)
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := findServerConfig("srv", nested, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Command != "project" {
+		t.Errorf("got %q, want %q", cfg.Command, "project")
+	}
+}
+
+func TestFindServerConfigExpandsEnvironmentVariables(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	t.Setenv("MCP_CLI_TEST_TOKEN_VALUE", "s3cret")
+	writeFile(t, filepath.Join(cwd, ".mcp.json"), `{"mcpServers": {"srv": {
+		"url": "https://example.test/mcp",
+		"headers": {"Authorization": "Bearer ${MCP_CLI_TEST_TOKEN_VALUE}"},
+		"args": ["--host=${MCP_CLI_TEST_UNSET_HOST:-localhost}"]
+	}}}`)
+
+	cfg, err := findServerConfig("srv", cwd, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Headers["Authorization"] != "Bearer s3cret" {
+		t.Errorf("got %q", cfg.Headers["Authorization"])
+	}
+	if cfg.Args[0] != "--host=localhost" {
+		t.Errorf("got %q, want the default of an unset variable", cfg.Args[0])
+	}
+}
+
+// An empty token or URL fails far from its cause, so an unset variable is reported instead.
+func TestFindServerConfigReportsAnUnsetVariable(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(cwd, ".mcp.json"),
+		`{"mcpServers": {"srv": {"url": "https://${MCP_CLI_TEST_UNSET_HOST}/mcp"}}}`)
+
+	_, err := findServerConfig("srv", cwd, home)
+	if err == nil || !strings.Contains(err.Error(), "MCP_CLI_TEST_UNSET_HOST") {
+		t.Fatalf("got %v, want the unset variable named", err)
 	}
 }
 

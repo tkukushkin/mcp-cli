@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -73,7 +76,7 @@ func callToolCmd() *cobra.Command {
 
 			var errlog io.Writer = io.Discard
 			if verbose {
-				errlog = os.Stderr
+				errlog = cmd.ErrOrStderr()
 			}
 			result, err := callTool(cmd.Context(), cfg, args[1], arguments, errlog)
 			if err != nil {
@@ -97,7 +100,11 @@ func callToolCmd() *cobra.Command {
 }
 
 func main() {
-	if err := callToolCmd().Execute(); err != nil {
+	// Ctrl-C has to reach the context: it is what stops the MCP server this program started
+	// and the `security` command that may be sitting on a Keychain prompt.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := callToolCmd().ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
 }
