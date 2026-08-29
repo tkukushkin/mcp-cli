@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
-// keychainAvailable reports that this platform keeps Claude Code's credentials in the
-// Keychain rather than in a file.
-const keychainAvailable = true
+// keychainAvailable reports whether Claude Code keeps its credentials in the Keychain here,
+// as it does on macOS, rather than in a file. It is a variable so that tests can exercise
+// both stores on whichever platform they run.
+var keychainAvailable = runtime.GOOS == "darwin"
 
 // The Keychain is reached through the `security` command rather than Security.framework,
 // which matters more than it looks.
