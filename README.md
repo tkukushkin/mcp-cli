@@ -47,11 +47,8 @@ No config file of its own. Servers are looked up by name, first match wins:
 
 ## OAuth
 
-Servers behind `claude mcp login` work: the access token Claude Code holds for the server
-is sent as a bearer token.
-
-An expired token is refreshed and stored back where Claude Code keeps it. On macOS the
-first run asks for Keychain access once, as any unsigned tool does.
+Servers behind `claude mcp login` work: `mcp-cli` shares OAuth credentials with Claude Code,
+refreshing them in place when they expire.
 
 ## Scope
 
