@@ -23,7 +23,13 @@ jobs:
           go-version-file: go.mod
 
       - name: Check formatting
-        run: gofmt -l . | tee /dev/stderr | (! read)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-ed:"
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...
