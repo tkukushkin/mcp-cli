@@ -96,6 +96,7 @@ func callToolCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Pass the MCP server stderr through instead of discarding it.")
 	cmd.SetVersionTemplate("{{.Version}}\n")
 	cmd.CompletionOptions.DisableDefaultCmd = true
+	cmd.AddCommand(installSkillCmd())
 	return cmd
 }
 

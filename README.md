@@ -22,6 +22,15 @@ go install github.com/tkukushkin/mcp-cli@latest
 Or grab a prebuilt binary for `darwin`, `linux` or `windows` on `amd64`/`arm64`
 from the [releases page](https://github.com/tkukushkin/mcp-cli/releases).
 
+To teach Claude Code about the binary, install the skill it carries:
+
+```console
+mcp-cli install-skill
+```
+
+It writes `~/.claude/skills/mcp-cli/`, so the instructions Claude reads always match the
+installed version — rerun it after an upgrade. The directory ignores itself in git.
+
 ## Usage
 
 ```console
