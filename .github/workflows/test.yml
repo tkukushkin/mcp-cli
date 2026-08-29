@@ -37,9 +37,11 @@ jobs:
       - name: Test
         run: go test -v -coverprofile=coverage.out ./...
 
+      # Both platforms upload: the Keychain path only compiles on macOS, so a Linux-only
+      # report would leave it out of the numbers entirely rather than show it untested.
       - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v7
         with:
           files: coverage.out
+          flags: ${{ matrix.os }}
           token: ${{ secrets.CODECOV_TOKEN }}
