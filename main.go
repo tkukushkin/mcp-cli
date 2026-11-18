@@ -50,10 +50,9 @@ func readArguments(stdin *os.File) (map[string]any, error) {
 
 func callToolCmd() *cobra.Command {
 	var verbose bool
-	var harnessFlag string
 	cmd := &cobra.Command{
 		Use:     "mcp-cli <server> <tool>",
-		Short:   "Call an MCP tool of a server configured for Claude Code or Codex.",
+		Short:   "Call an MCP tool of a server configured for Claude Code.",
 		Args:    cobra.ExactArgs(2),
 		Version: getVersion(),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,11 +65,7 @@ func callToolCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			harness, err := selectHarness(harnessFlag, os.Getenv)
-			if err != nil {
-				return err
-			}
-			cfg, err := findServer(args[0], cwd, home, harness)
+			cfg, err := findServerConfig(args[0], cwd, home)
 			if err != nil {
 				return err
 			}
@@ -99,7 +94,6 @@ func callToolCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Pass the MCP server stderr through instead of discarding it.")
-	cmd.Flags().StringVar(&harnessFlag, "harness", "", "Which harness's configuration to use: claude or codex.")
 	cmd.SetVersionTemplate("{{.Version}}\n")
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(installSkillCmd())

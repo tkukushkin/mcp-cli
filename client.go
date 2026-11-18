@@ -38,8 +38,8 @@ func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// authorize adds the OAuth token the harness this server came from holds for it, unless the
-// config already carries an Authorization header of its own.
+// authorize adds the OAuth token Claude Code holds for this server, unless the config
+// already carries an Authorization header of its own.
 func authorize(ctx context.Context, cfg *serverConfig) (map[string]string, error) {
 	headers := maps.Clone(cfg.Headers)
 	if headers == nil {
@@ -51,7 +51,11 @@ func authorize(ctx context.Context, cfg *serverConfig) (map[string]string, error
 			return headers, nil
 		}
 	}
-	token, err := harnessOAuthToken(ctx, cfg)
+	credentials, err := readClaudeCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	token, err := oauthToken(ctx, credentials, cfg.Name, cfg.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -59,24 +63,6 @@ func authorize(ctx context.Context, cfg *serverConfig) (map[string]string, error
 		headers["Authorization"] = "Bearer " + token
 	}
 	return headers, nil
-}
-
-// harnessOAuthToken asks the store of the harness this config came from. The codex home is
-// derived here rather than threaded through newTransport, as it comes from the environment
-// the same way Claude Code's own credential location does.
-func harnessOAuthToken(ctx context.Context, cfg *serverConfig) (string, error) {
-	if cfg.harness == harnessCodex {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return codexOAuthToken(ctx, cfg.Name, cfg.URL, codexHomeDir(home))
-	}
-	credentials, err := readClaudeCredentials(ctx)
-	if err != nil {
-		return "", err
-	}
-	return oauthToken(ctx, credentials, cfg.Name, cfg.URL)
 }
 
 func newTransport(ctx context.Context, cfg *serverConfig, errlog io.Writer) (mcp.Transport, error) {
@@ -99,7 +85,6 @@ func newTransport(ctx context.Context, cfg *serverConfig, errlog io.Writer) (mcp
 		return nil, fmt.Errorf("server config has neither %q nor %q", "url", "command")
 	}
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
-	cmd.Dir = cfg.Cwd
 	cmd.Env = os.Environ()
 	for name, value := range cfg.Env {
 		cmd.Env = append(cmd.Env, name+"="+value)
